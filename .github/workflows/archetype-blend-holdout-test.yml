@@ -15,9 +15,9 @@ name: Archetype-blend hold-out test
 #          source_skeleton_path / no_fit_spec_path left pointing at
 #          Puffer_dense (unchanged), so the garment and its reference
 #          pose stay identical to the Goblin/Trex runs.
-#   2. Push that to a repo, point the "Clone cloth-fit" step below at it
-#      (edit the git clone URL) OR clone the real Huangzizhou/cloth-fit
-#      and push your added directory as a fork.
+#   2. Commit and push it to the SAME repo this workflow file lives in —
+#      the workflow checks out its own repo (see "Checkout this repo"
+#      below), it does not fetch anything from upstream Huangzizhou/cloth-fit.
 #   3. Run this workflow with held_out_example set to that directory name.
 on:
   workflow_dispatch:
@@ -45,11 +45,15 @@ jobs:
             libsuitesparse-dev
           pip install --break-system-packages -q trimesh numpy
 
-      - name: Clone cloth-fit
-        # EDIT THIS if your third avatar lives in a fork rather than
-        # upstream — this must be a repo that already contains
-        # garment-data/${{ inputs.held_out_example }}/.
-        run: git clone https://github.com/Huangzizhou/cloth-fit.git
+      - name: Checkout this repo
+        # This workflow runs inside YOUR repo, which already has the
+        # cloth-fit source plus the held-out avatar committed — no need
+        # to re-clone upstream. Checked out into a "cloth-fit" subfolder
+        # so every later `working-directory: cloth-fit` below still works
+        # unchanged.
+        uses: actions/checkout@v4
+        with:
+          path: cloth-fit
 
       - name: Check held-out example exists before doing any real work
         run: |
