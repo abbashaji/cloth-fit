@@ -206,23 +206,40 @@ jobs:
           disp_goblin = vf["goblin"] - v0["goblin"]
           disp_trex = vf["trex"] - v0["trex"]
           disp_held_out_real = vf["held_out"] - v0["held_out"]
-
-          # Simplest possible blend: plain 50/50 average. Predicted final
-          # position = held-out avatar's own reference pose + averaged correction.
-          disp_predicted = 0.5 * disp_goblin + 0.5 * disp_trex
-          vf_held_out_predicted = v0["held_out"] + disp_predicted
-
-          err = np.linalg.norm(vf_held_out_predicted - vf["held_out"], axis=1)
           real_scale = np.linalg.norm(disp_held_out_real, axis=1)
+
+          def evaluate(name, disp_predicted):
+              vf_predicted = v0["held_out"] + disp_predicted
+              err = np.linalg.norm(vf_predicted - vf["held_out"], axis=1)
+              corr = np.corrcoef(np.linalg.norm(disp_predicted, axis=1), real_scale)[0, 1]
+              print(f"\n--- {name} ---")
+              print(f"  error: mean={err.mean():.4f} median={np.median(err):.4f} std={err.std():.4f} max={err.max():.4f}")
+              print(f"  error as fraction of real displacement magnitude (mean): {err.mean() / max(real_scale.mean(), 1e-9):.2%}")
+              print(f"  correlation (predicted vs real displacement magnitude, per-vertex): {corr:.3f}")
+              return err.mean()
 
           print("\n=== HOLD-OUT TEST RESULT ===")
           print(f"Real held-out displacement:      mean={real_scale.mean():.4f} max={real_scale.max():.4f}")
-          print(f"Predicted-vs-real error:          mean={err.mean():.4f} median={np.median(err):.4f} "
-                f"std={err.std():.4f} max={err.max():.4f}")
-          print(f"Error as fraction of real displacement magnitude (mean): "
-                f"{err.mean() / max(real_scale.mean(), 1e-9):.2%}")
-          corr = np.corrcoef(np.linalg.norm(disp_predicted, axis=1), real_scale)[0, 1]
-          print(f"Correlation (predicted vs real displacement magnitude, per-vertex): {corr:.3f}")
+
+          # Four predictors, cheapest/dumbest first, so the blend's actual
+          # value-add (or lack of it) is visible against real baselines
+          # rather than judged in isolation:
+          #   1. no correction at all (predict the reference pose unchanged)
+          #   2. Goblin's own fit, unblended (held_out IS a scaled Goblin,
+          #      so this is the naive "just use the nearest archetype" guess)
+          #   3. Trex's own fit, unblended (the "wrong" archetype, expected
+          #      to do worse — a sanity check that the metric behaves as
+          #      expected, not just noise)
+          #   4. the 50/50 blend already computed in the previous run
+          mean_none  = evaluate("Baseline: no correction (reference pose)", np.zeros_like(disp_held_out_real))
+          mean_goblin = evaluate("Baseline: Goblin's fit alone (nearest archetype)", disp_goblin)
+          mean_trex   = evaluate("Baseline: Trex's fit alone (farthest archetype)", disp_trex)
+          mean_blend  = evaluate("50/50 blend (Goblin + Trex averaged)", 0.5 * disp_goblin + 0.5 * disp_trex)
+
+          print("\n=== SUMMARY: mean error, lower is better ===")
+          for name, val in [("no correction", mean_none), ("Goblin alone", mean_goblin),
+                             ("Trex alone", mean_trex), ("50/50 blend", mean_blend)]:
+              print(f"  {name:15s} {val:.4f}")
           print("\nNo pass/fail threshold is asserted here — report the numbers, "
                 "don't invent a cutoff. Read them yourself.")
           EOF
