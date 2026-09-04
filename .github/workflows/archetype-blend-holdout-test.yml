@@ -1,31 +1,29 @@
-name: Archetype-blend hold-out test
+name: Archetype-blend hold-out test (multi-magnitude)
 
-# Requires a THIRD avatar you supply yourself, paired with the same
-# Puffer_dense garment used by Goblin_Jacket and Trex_Jacket. The repo
-# ships no third Puffer_dense avatar (Goblin_Jumpsuit reuses Goblin's
-# avatar with a different garment; foxgirl_skirt uses a different
-# garment entirely) — confirmed by grepping every setup.json in
-# garment-data/. Before running this workflow:
-#   1. Create garment-data/<held_out_example>/ in your fork of cloth-fit
-#      (or wherever this workflow's checkout points), containing:
-#        - avatar.obj, skeleton.obj, skin.txt for your third avatar
-#        - a setup.json modeled on Goblin_Jacket/setup.json, but with
-#          avatar_mesh_path / target_skeleton_path / avatar_skin_weights_path
-#          pointing at your new avatar, and garment_mesh_path /
-#          source_skeleton_path / no_fit_spec_path left pointing at
-#          Puffer_dense (unchanged), so the garment and its reference
-#          pose stay identical to the Goblin/Trex runs.
-#   2. Commit and push it to the SAME repo this workflow file lives in —
-#      the workflow checks out its own repo (see "Checkout this repo"
-#      below), it does not fetch anything from upstream Huangzizhou/cloth-fit.
-#   3. Run this workflow with held_out_example set to that directory name.
+# Tests THREE held-out avatars, all derived from Goblin's own rig at
+# increasing deformation magnitude (mild/moderate/extreme), each paired
+# with the same Puffer_dense garment used by Goblin_Jacket/Trex_Jacket.
+#
+# IMPORTANT LIMITATION, stated plainly: this cannot test a body genuinely
+# "between" Goblin and Trex, because Goblin and Trex use completely
+# different mesh topologies/skeletons — interpolating between them
+# requires solving cross-rig correspondence, which is the exact open
+# problem this whole pivot is about. What this CAN test: how far a
+# single archetype's correction stays accurate as the query body moves
+# away from it, and whether naive blending ever starts adding value as
+# that distance grows. Real bbox-ratio check (solver working frame, not
+# raw asset files) confirmed Goblin and Trex are already almost the same
+# overall size (~1.0-1.1x) — the difference between them is topology/
+# anatomy, not scale — so "distance from Goblin" here means deformation
+# magnitude of the SAME rig, not genuine progress toward Trex's shape.
+#
+# Requires three avatar directories already committed to THIS repo:
+#   garment-data/assets/avatars/{Held_Out,Held_Out_Moderate,Held_Out_Extreme}/
+#     {avatar.obj, skeleton.obj, skin.txt}
+#   garment-data/{Held_Out_Jacket,Held_Out_Jacket_Moderate,Held_Out_Jacket_Extreme}/
+#     setup.json (garment_mesh_path/source_skeleton_path still Puffer_dense)
 on:
-  workflow_dispatch:
-    inputs:
-      held_out_example:
-        description: 'garment-data/ subdirectory name for the third (held-out) avatar, paired with Puffer_dense'
-        required: true
-        default: 'Held_Out_Jacket'
+  workflow_dispatch: {}
 
 jobs:
   test:
@@ -57,13 +55,13 @@ jobs:
 
       - name: Check held-out example exists before doing any real work
         run: |
-          d="cloth-fit/garment-data/${{ inputs.held_out_example }}"
-          if [ ! -f "$d/setup.json" ]; then
-            echo "::error::$d/setup.json not found. This workflow needs a real third avatar committed there first — see the comments at the top of this file. Nothing to test without it."
-            exit 1
-          fi
-          echo "Found held-out example: $d"
-          cat "$d/setup.json"
+          for d in cloth-fit/garment-data/Held_Out_Jacket cloth-fit/garment-data/Held_Out_Jacket_Moderate cloth-fit/garment-data/Held_Out_Jacket_Extreme; do
+            if [ ! -f "$d/setup.json" ]; then
+              echo "::error::$d/setup.json not found. This workflow needs all three held-out avatars committed first — see the comments at the top of this file. Nothing to test without it."
+              exit 1
+            fi
+            echo "Found: $d"
+          done
 
       - name: Patch BLAS/LAPACK linkage onto the executables
         # Proven fix (rounds 1-3 of the original build spike): polysolve's
@@ -150,10 +148,10 @@ jobs:
         run: |
           find . -maxdepth 2 -iname "PolyFEM_bin*" -exec ls -la {} \;
 
-      - name: Run Goblin_Jacket, Trex_Jacket, and the held-out example
+      - name: Run Goblin_Jacket, Trex_Jacket, and all three held-out levels
         working-directory: cloth-fit
         run: |
-          for example in Goblin_Jacket Trex_Jacket "${{ inputs.held_out_example }}"; do
+          for example in Goblin_Jacket Trex_Jacket Held_Out_Jacket Held_Out_Jacket_Moderate Held_Out_Jacket_Extreme; do
             echo "=== Running $example ==="
             cd "garment-data/$example"
             ../../build/PolyFEM_bin -j setup.json --max_threads "$(nproc)" 2>&1 | tee "$GITHUB_WORKSPACE/cloth-fit/${example//\//_}.log"
@@ -186,62 +184,52 @@ jobs:
               idx = max(int(os.path.basename(f).split("_")[-1].split(".")[0]) for f in files)
               return os.path.join(dirpath, f"step_garment_{idx}.obj")
 
-          held_out = "${{ inputs.held_out_example }}"
-          dirs = {
-              "goblin": "garment-data/Goblin_Jacket",
-              "trex": "garment-data/Trex_Jacket",
-              "held_out": f"garment-data/{held_out}",
-          }
+          goblin_dir, trex_dir = "garment-data/Goblin_Jacket", "garment-data/Trex_Jacket"
+          v0_goblin = np.asarray(trimesh.load(os.path.join(goblin_dir, "step_garment_0.obj"), process=False).vertices)
+          v0_trex   = np.asarray(trimesh.load(os.path.join(trex_dir, "step_garment_0.obj"), process=False).vertices)
+          vf_goblin = np.asarray(trimesh.load(final_step(goblin_dir), process=False).vertices)
+          vf_trex   = np.asarray(trimesh.load(final_step(trex_dir), process=False).vertices)
+          disp_goblin = vf_goblin - v0_goblin
+          disp_trex   = vf_trex - v0_trex
 
-          v0 = {k: np.asarray(trimesh.load(os.path.join(d, "step_garment_0.obj"), process=False).vertices)
-                for k, d in dirs.items()}
-          vf = {k: np.asarray(trimesh.load(final_step(d), process=False).vertices)
-                for k, d in dirs.items()}
-
-          n = {k: v.shape[0] for k, v in v0.items()}
-          print("Vertex counts (step_garment_0):", n)
-          if len(set(n.values())) != 1:
-              raise SystemExit("::error::step_garment_0.obj vertex counts differ across examples — not directly comparable, stopping rather than faking a comparison.")
-
-          disp_goblin = vf["goblin"] - v0["goblin"]
-          disp_trex = vf["trex"] - v0["trex"]
-          disp_held_out_real = vf["held_out"] - v0["held_out"]
-          real_scale = np.linalg.norm(disp_held_out_real, axis=1)
-
-          def evaluate(name, disp_predicted):
-              vf_predicted = v0["held_out"] + disp_predicted
-              err = np.linalg.norm(vf_predicted - vf["held_out"], axis=1)
+          def evaluate(name, v0_h, vf_h, disp_predicted, real_scale):
+              vf_predicted = v0_h + disp_predicted
+              err = np.linalg.norm(vf_predicted - vf_h, axis=1)
               corr = np.corrcoef(np.linalg.norm(disp_predicted, axis=1), real_scale)[0, 1]
-              print(f"\n--- {name} ---")
-              print(f"  error: mean={err.mean():.4f} median={np.median(err):.4f} std={err.std():.4f} max={err.max():.4f}")
-              print(f"  error as fraction of real displacement magnitude (mean): {err.mean() / max(real_scale.mean(), 1e-9):.2%}")
-              print(f"  correlation (predicted vs real displacement magnitude, per-vertex): {corr:.3f}")
+              print(f"  {name:45s} err_mean={err.mean():.4f}  err/real={err.mean()/max(real_scale.mean(),1e-9):.1%}  corr={corr:.3f}")
               return err.mean()
 
-          print("\n=== HOLD-OUT TEST RESULT ===")
-          print(f"Real held-out displacement:      mean={real_scale.mean():.4f} max={real_scale.max():.4f}")
+          levels = {
+              "mild (Held_Out_Jacket, scale~1.1-1.2)": "garment-data/Held_Out_Jacket",
+              "moderate (scale~1.35-1.45)":            "garment-data/Held_Out_Jacket_Moderate",
+              "extreme (scale~1.7-1.9)":                "garment-data/Held_Out_Jacket_Extreme",
+          }
 
-          # Four predictors, cheapest/dumbest first, so the blend's actual
-          # value-add (or lack of it) is visible against real baselines
-          # rather than judged in isolation:
-          #   1. no correction at all (predict the reference pose unchanged)
-          #   2. Goblin's own fit, unblended (held_out IS a scaled Goblin,
-          #      so this is the naive "just use the nearest archetype" guess)
-          #   3. Trex's own fit, unblended (the "wrong" archetype, expected
-          #      to do worse — a sanity check that the metric behaves as
-          #      expected, not just noise)
-          #   4. the 50/50 blend already computed in the previous run
-          mean_none  = evaluate("Baseline: no correction (reference pose)", np.zeros_like(disp_held_out_real))
-          mean_goblin = evaluate("Baseline: Goblin's fit alone (nearest archetype)", disp_goblin)
-          mean_trex   = evaluate("Baseline: Trex's fit alone (farthest archetype)", disp_trex)
-          mean_blend  = evaluate("50/50 blend (Goblin + Trex averaged)", 0.5 * disp_goblin + 0.5 * disp_trex)
+          summary = []
+          for label, d in levels.items():
+              v0_h = np.asarray(trimesh.load(os.path.join(d, "step_garment_0.obj"), process=False).vertices)
+              vf_h = np.asarray(trimesh.load(final_step(d), process=False).vertices)
+              if v0_h.shape[0] != disp_goblin.shape[0]:
+                  print(f"::error::{d}: vertex count mismatch, skipping rather than faking a comparison")
+                  continue
+              disp_real = vf_h - v0_h
+              real_scale = np.linalg.norm(disp_real, axis=1)
+              print(f"\n=== {label} ===")
+              print(f"  real displacement: mean={real_scale.mean():.4f} max={real_scale.max():.4f}")
+              e_none   = evaluate("no correction",        v0_h, vf_h, np.zeros_like(disp_real), real_scale)
+              e_goblin = evaluate("Goblin alone",          v0_h, vf_h, disp_goblin, real_scale)
+              e_trex   = evaluate("Trex alone",             v0_h, vf_h, disp_trex, real_scale)
+              e_blend  = evaluate("50/50 blend",            v0_h, vf_h, 0.5*disp_goblin + 0.5*disp_trex, real_scale)
+              summary.append((label, e_none, e_goblin, e_trex, e_blend))
 
-          print("\n=== SUMMARY: mean error, lower is better ===")
-          for name, val in [("no correction", mean_none), ("Goblin alone", mean_goblin),
-                             ("Trex alone", mean_trex), ("50/50 blend", mean_blend)]:
-              print(f"  {name:15s} {val:.4f}")
-          print("\nNo pass/fail threshold is asserted here — report the numbers, "
-                "don't invent a cutoff. Read them yourself.")
+          print("\n=== DEGRADATION CURVE: mean error, lower is better ===")
+          print(f"  {'level':45s} {'no_corr':>8s} {'goblin':>8s} {'trex':>8s} {'blend':>8s}")
+          for label, e_none, e_goblin, e_trex, e_blend in summary:
+              print(f"  {label:45s} {e_none:8.4f} {e_goblin:8.4f} {e_trex:8.4f} {e_blend:8.4f}")
+          print("\nWatch whether 'goblin' error rises as magnitude increases (expected — query")
+          print("moves away from the archetype), and whether 'blend' ever beats 'goblin' at any")
+          print("level (that would be the first sign naive blending adds value somewhere).")
+          print("No pass/fail threshold is asserted here — report the numbers, don't invent a cutoff.")
           EOF
 
       - name: Collect outputs
