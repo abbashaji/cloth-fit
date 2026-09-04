@@ -143,7 +143,7 @@ jobs:
         run: |
           nproc
           free -h
-          make -j"$(nproc)" 2>&1 | tee ../../build.log
+          make -j"$(nproc)" 2>&1 | tee "$GITHUB_WORKSPACE/cloth-fit/build.log"
 
       - name: Check binary exists
         working-directory: cloth-fit/build
@@ -156,7 +156,7 @@ jobs:
           for example in Goblin_Jacket Trex_Jacket "${{ inputs.held_out_example }}"; do
             echo "=== Running $example ==="
             cd "garment-data/$example"
-            ../../build/PolyFEM_bin -j setup.json --max_threads "$(nproc)" 2>&1 | tee "../../../${example//\//_}.log"
+            ../../build/PolyFEM_bin -j setup.json --max_threads "$(nproc)" 2>&1 | tee "$GITHUB_WORKSPACE/cloth-fit/${example//\//_}.log"
             cd ../..
           done
 
@@ -173,7 +173,7 @@ jobs:
         # cheaply before building anything fancier.
         working-directory: cloth-fit
         run: |
-          python3 << 'EOF'
+          python3 << 'EOF' | tee "$GITHUB_WORKSPACE/cloth-fit/holdout-test-results.log"
           import trimesh
           import numpy as np
           import glob
